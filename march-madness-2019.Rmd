@@ -1,0 +1,80 @@
+---
+title: "March Madness 2019"
+author: "Ekarin Eric Pongpipat, M.A."
+date: "Date"
+output:
+  html_document:
+    highlight: textmate
+    theme: lumen
+    toc: yes
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+---
+
+## R Packages
+```{r}
+packages <- c("tidyverse", "kableExtra")
+xfun::pkg_attach(packages, message = F)
+```
+
+## Functions
+```{r}
+nice_tables <- function(table) {
+  kable(table) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+}
+```
+
+## Data
+```{r, message=F, results=F}
+data_files <- list.files("data")
+df <- map(paste0("data/", data_files), read_csv)
+names(df) <- gsub(".csv", "", data_files)
+```
+
+## Regular Season
+
+FGM - field goals made
+FGA - field goals attempted
+FGM3 - three pointers made
+FGA3 - three pointers attempted
+FTM - free throws made
+FTA - free throws attempted
+OR - offensive rebounds
+DR - defensive rebounds
+Ast - assists
+TO - turnovers committed
+Stl - steals
+Blk - blocks
+PF - personal fouls committed
+
+```{r}
+df_regular_season <- df$RegularSeasonDetailedResults
+summary(df_regular_season) %>% 
+  nice_tables() %>%
+  scroll_box(width = "100%")
+
+df_regular_season_pca <- df_regular_season %>%
+  select(contains("W"), -WTeamID, -WLoc)
+
+cor_mat_long <- df_regular_season_pca %>%
+  cor() %>%
+  reshape2::melt() %>%
+  ggplot(., aes(Var1, Var2, fill = value)) +
+    geom_raster() +
+    theme_minimal() +
+    theme(axis.text.x = element_text(hjust = 1, angle = 45)) +
+    labs(x = "Metric",
+         y = "Metric",
+         fill = "Value") +
+    scale_fill_distiller(palette = "RdBu", limits = c(-1, 1))
+```
+
+## NCAA Tourney
+```{r}
+df_ncaa_tourney <- df$NCAATourneyDetailedResults
+summary(df_ncaa_tourney) %>%
+  nice_tables() %>%
+  scroll_box(width = "100%")
+```

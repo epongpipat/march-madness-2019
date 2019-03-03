@@ -14,67 +14,281 @@ output:
 
 ## R Packages
 ```{r}
-packages <- c("tidyverse", "kableExtra")
+packages <- c("tidyverse", "kableExtra", "broom", "broomExtra", "gganimate")
 xfun::pkg_attach(packages, message = F)
 ```
 
 ## Functions
 ```{r}
 nice_tables <- function(table) {
-  kable(table) %>%
-    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+  table %>%
+    kable() %>% 
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width = "100%", height = "200px")
 }
-```
-
-## Data
-```{r, message=F, results=F}
-data_files <- list.files("data")
-df <- map(paste0("data/", data_files), read_csv)
-names(df) <- gsub(".csv", "", data_files)
 ```
 
 ## Regular Season
 
-FGM - field goals made
-FGA - field goals attempted
-FGM3 - three pointers made
-FGA3 - three pointers attempted
-FTM - free throws made
-FTA - free throws attempted
-OR - offensive rebounds
-DR - defensive rebounds
-Ast - assists
-TO - turnovers committed
-Stl - steals
-Blk - blocks
-PF - personal fouls committed
+* FGM - field goals made
+* FGA - field goals attempted
+* FGM3 - three pointers made
+* FGA3 - three pointers attempted
+* FTM - free throws made
+* FTA - free throws attempted
+* OR - offensive rebounds
+* DR - defensive rebounds
+* Ast - assists
+* TO - turnovers committed
+* Stl - steals
+* Blk - blocks
+* PF - personal fouls committed
 
 ```{r}
-df_regular_season <- df$RegularSeasonDetailedResults
-summary(df_regular_season) %>% 
+df_regular_season <- read_csv("data/RegularSeasonDetailedResults.csv")
+
+df_regular_season <- df_regular_season %>%
+  rowwise() %>%
+  mutate(WFGM2 = WFGM-WFGM3,
+         WFGA2 = WFGA-WFGA3,
+         LFGM2 = LFGM-LFGM3,
+         LFGA2 = LFGM-LFGA3,
+         diff_score = WScore-LScore,
+         team_id_pair = paste0(sort(c(WTeamID, LTeamID)), collapse = "_")) %>%
+  select(-DayNum, -WTeamID, -WScore, -LTeamID, -LScore, -WLoc, -NumOT, -WFGM, -WFGA, -LFGM, -LFGA) %>%
+  ungroup()
+
+df_regular_season[2:28] <- apply(df_regular_season[2:28], 2, scale)
+```
+
+### Summary
+```{r}
+summary(df_regular_season) %>%
   nice_tables() %>%
   scroll_box(width = "100%")
+```
 
-df_regular_season_pca <- df_regular_season %>%
-  select(contains("W"), -WTeamID, -WLoc)
+### Correlation Matrix
+```{r}
+df_reg_season_nested <- df_regular_season %>%
+  select(-team_id_pair) %>%
+  group_by(Season) %>%
+  nest() %>%
+  mutate(cor_mat = map(data, cor),
+         cor_mat_long = map(cor_mat, reshape::melt)) %>%
+  select(-data, -cor_mat) %>%
+  unnest()
 
-cor_mat_long <- df_regular_season_pca %>%
-  cor() %>%
-  reshape2::melt() %>%
-  ggplot(., aes(Var1, Var2, fill = value)) +
-    geom_raster() +
-    theme_minimal() +
-    theme(axis.text.x = element_text(hjust = 1, angle = 45)) +
-    labs(x = "Metric",
-         y = "Metric",
-         fill = "Value") +
-    scale_fill_distiller(palette = "RdBu", limits = c(-1, 1))
+ggplot(df_reg_season_nested, aes(X1, X2, fill = value)) +
+  geom_raster() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1, angle = 45)) +
+  labs(title = 'Year: {round(frame_time,0)}',
+       x = "Metric",
+       y = "Metric",
+       fill = "Correlation") +
+  scale_fill_distiller(palette = "RdBu", limits = c(-1, 1)) +
+  transition_time(Season)
+```
+
+### First-Level Analysis
+```{r}
+df_level1_tidy <- df_regular_season %>%
+  select(-team_id_pair) %>%
+  group_by(Season) %>%
+  do(level1 = lm(diff_score ~ ., data = .)) %>%
+  tidy(level1) %>%
+  mutate(p.value.fdr = p.adjust(p.value, "fdr")) %>%
+  tidy_lm_add_logical_significance(tidy_df = ., p_values = "p.value.fdr", sig_column_name = "sig.fdr.05")
+
+df_level1_tidy %>% 
+  nice_tables()
+```
+
+#### Significant Only
+```{r}
+df_level1_tidy %>% 
+  filter(sig.fdr.05 == TRUE) %>% 
+  nice_tables()
+```
+
+### Second-Level Analysis
+```{r}
+colnames(df_level1_tidy)[2] <- "term_level1"
+df_level2_tidy <- df_level1_tidy %>%
+  group_by(term_level1) %>%
+  do(level2 = lm(estimate ~ Season, .)) %>%
+  tidy(level2) %>%
+  mutate(p.value.fdr = p.adjust(p.value, "fdr")) %>%
+  tidy_lm_add_logical_significance(tidy_df = ., p_values = "p.value.fdr", sig_column_name = "sig.fdr.05") %>%
+  tidy_lm_add_r_squared(., n = nrow(df_level1_tidy))
+
+df_level2_tidy %>% nice_tables()
+```
+
+#### Significant Only
+```{r}
+df_level2_tidy %>% 
+  filter(sig.fdr.05 == TRUE) %>% 
+  nice_tables()
 ```
 
 ## NCAA Tourney
 ```{r}
-df_ncaa_tourney <- df$NCAATourneyDetailedResults
+df_ncaa_tourney <- read_csv("data/NCAATourneyDetailedResults.csv")
+df_ncaa_tourney <- df_ncaa_tourney %>%
+  rowwise() %>%
+  mutate(WFGM2 = WFGM-WFGM3,
+         WFGA2 = WFGA-WFGA3,
+         LFGM2 = LFGM-LFGM3,
+         LFGA2 = LFGM-LFGA3,
+         diff_score = WScore-LScore,
+         team_id_pair = paste0(sort(c(WTeamID, LTeamID)), collapse = "_")) %>%
+  select(-DayNum, -WTeamID, -WScore, -LTeamID, -LScore, -WLoc, -NumOT, -WFGM, -WFGA, -LFGM, -LFGA) %>%
+  ungroup()
+
+df_ncaa_tourney[2:28] <- apply(df_ncaa_tourney[2:28], 2, scale)
+```
+
+### Summary
+```{r}
 summary(df_ncaa_tourney) %>%
   nice_tables() %>%
   scroll_box(width = "100%")
+```
+
+### Correlation Matrix
+```{r}
+df_ncaa_tourney  %>%
+  select(-team_id_pair) %>%
+  cor() %>%
+  reshape2::melt(., id = "Season") %>%
+  ggplot(., aes(Var1, Var2, fill = value)) +
+  geom_raster() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1, angle = 45)) +
+  labs(x = "Metric",
+       y = "Metric",
+       fill = "Correlation") +
+  scale_fill_distiller(palette = "RdBu", limits = c(-1, 1))
+```
+
+### First-Level Analysis
+```{r}
+df_level1_tidy <- df_ncaa_tourney %>%
+  select(-team_id_pair) %>%
+  group_by(Season) %>%
+  do(level1 = lm(diff_score ~ ., data = .)) %>%
+  tidy(level1) %>%
+  mutate(p.value.fdr = p.adjust(p.value, "fdr")) %>%
+  tidy_lm_add_logical_significance(tidy_df = ., p_values = "p.value.fdr", sig_column_name = "sig.fdr.05")
+
+df_level1_tidy %>% 
+  nice_tables()
+```
+
+#### Significant Only
+```{r}
+df_level1_tidy %>% 
+  filter(sig.fdr.05 == TRUE) %>% 
+  nice_tables()
+```
+
+### Second-Level Analysis
+```{r}
+colnames(df_level1_tidy)[2] <- "term_level1"
+df_level2_tidy <- df_level1_tidy %>%
+  group_by(term_level1) %>%
+  do(level2 = lm(estimate ~ Season, .)) %>%
+  tidy(level2) %>%
+  mutate(p.value.fdr = p.adjust(p.value, "fdr")) %>%
+  tidy_lm_add_logical_significance(tidy_df = ., p_values = "p.value.fdr", sig_column_name = "sig.fdr.05") %>%
+  tidy_lm_add_r_squared(., n = nrow(df_level1_tidy))
+
+df_level2_tidy %>% nice_tables()
+```
+
+#### Significant Only
+```{r}
+df_level2_tidy %>% 
+  filter(sig.fdr.05 == TRUE) %>% 
+  nice_tables()
+```
+
+## Combined
+```{r}
+df_regular_season <- df_regular_season %>%
+  mutate(type = -0.5)
+df_ncaa_tourney <- df_ncaa_tourney %>%
+  mutate(type = 0.5)
+
+df_combined <- rbind(df_regular_season, df_ncaa_tourney)
+```
+
+### Summary
+```{r}
+summary(df_combined) %>%
+  nice_tables() %>%
+  scroll_box(width = "100%")
+```
+
+### Correlation Matrix
+```{r}
+df_combined  %>%
+  select(-team_id_pair, -type) %>%
+  cor() %>%
+  reshape2::melt(., id = "Season") %>%
+  ggplot(., aes(Var1, Var2, fill = value)) +
+  geom_raster() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1, angle = 45)) +
+  labs(x = "Metric",
+       y = "Metric",
+       fill = "Correlation") +
+  scale_fill_distiller(palette = "RdBu", limits = c(-1, 1))
+```
+
+### First-Level Analysis
+```{r}
+df_level1_tidy <- df_combined %>%
+  select(-team_id_pair) %>%
+  group_by(Season) %>%
+  do(level1 = lm(diff_score ~ ., data = .)) %>%
+  tidy(level1) %>%
+  mutate(p.value.fdr = p.adjust(p.value, "fdr")) %>%
+  tidy_lm_add_logical_significance(tidy_df = ., p_values = "p.value.fdr", sig_column_name = "sig.fdr.05")
+
+df_level1_tidy %>% 
+  nice_tables()
+```
+
+#### Significant Only
+```{r}
+df_level1_tidy %>% 
+  filter(sig.fdr.05 == TRUE) %>% 
+  nice_tables()
+```
+
+### Second-Level Analysis
+```{r}
+colnames(df_level1_tidy)[2] <- "term_level1"
+df_level2_tidy <- df_level1_tidy %>%
+  group_by(term_level1) %>%
+  do(level2 = lm(estimate ~ Season, .)) %>%
+  tidy(level2) %>%
+  mutate(p.value.fdr = p.adjust(p.value, "fdr")) %>%
+  tidy_lm_add_logical_significance(tidy_df = ., p_values = "p.value.fdr", sig_column_name = "sig.fdr.05") %>%
+  tidy_lm_add_r_squared(., n = nrow(df_level1_tidy))
+
+df_level2_tidy %>% nice_tables()
+```
+
+#### Significant Only
+```{r}
+df_level2_tidy %>% 
+  filter(sig.fdr.05 == TRUE) %>% 
+  nice_tables()
+```
+
+```{r}
+
 ```

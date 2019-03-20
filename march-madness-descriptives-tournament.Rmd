@@ -1,0 +1,234 @@
+---
+title: "March Madness Descriptives"
+subtitle: "Tournament"
+author: "Ekarin Eric Pongpipat, M.A."
+date: "Date"
+output:
+  html_document:
+    highlight: textmate
+    theme: lumen
+    toc: yes
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+---
+
+## R Packages
+```{r}
+packages <- c("tidyverse", "kableExtra", "broom", "broomExtra", "gganimate")
+xfun::pkg_attach(packages, message = F)
+```
+
+## Functions
+```{r}
+nice_tables <- function(table) {
+  table %>%
+    kable() %>% 
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width = "100%", height = "200px")
+}
+```
+
+Let's first look at the regular season dataset.
+
+## Regular Season
+```{r}
+df_tournament <- read_csv("data/NCAATourneyDetailedResults.csv")
+glimpse(df_tournament)
+```
+
+We will also need to load the Teams.csv dataset to append actual team names rather than IDs.
+
+```{r}
+df_teams <- read_csv("data/Teams.csv")
+glimpse(df_teams)
+
+# select only the TeamID and TeamName vars
+df_teams <- df_teams %>% select(TeamID, TeamName) 
+
+# create df for win and loss TeamID and TeamNames to append to regular season df
+df_wteams <- df_teams                         
+colnames(df_wteams) <- c("WTeamID", "WTeamName")
+df_lteams <- df_teams                        
+colnames(df_lteams) <- c("LTeamID", "LTeamName")
+
+# add actual names using inner_join
+# remove TeamID
+df_tournament <- df_tournament %>%
+  inner_join(., df_wteams, by = "WTeamID") %>%
+  inner_join(., df_lteams, by = "LTeamID") %>%
+  select(-contains("TeamID"))
+
+glimpse(df_tournament)
+```
+
+Let's break apart the tables into wins and losses so that we can manipulate the same variables at the same time.
+
+```{r}
+df_tournament_win <- df_tournament %>%
+  select(Season, DayNum, contains("W"))
+colnames(df_tournament_win) <- gsub("W", "", colnames(df_tournament_win))
+
+df_tournament_loss <- df_tournament %>%
+  select(Season, DayNum, contains("L"))
+colnames(df_tournament_loss) <- gsub("L", "", colnames(df_tournament_loss))
+
+# data manipulation ----
+# create new variables that are also easy to read
+data_manipulation_tournament <- function(data) {
+  data %>%
+  select(season = Season,
+         n_day = DayNum,
+         team_name = TeamName,
+         score = Score,
+         points_made = FGM,
+         points_attempted = FGA,
+         points_3_made = FGM3,
+         points_3_attempted = FGA3,
+         points_free_throws_made = FTM,
+         points_free_throws_attempted = FTA,
+         rebound_offensive = OR,
+         rebound_defensive = DR,
+         assist = Ast,
+         turnovers = TO,
+         steals = Stl,
+         blocks = Blk,
+         personal_fouls = PF) %>%
+  mutate(index = 1:nrow(data),
+         points_2_made = points_made - points_3_made,
+         points_2_attempted = points_attempted - points_3_attempted,
+         points_missed = points_attempted - points_made,
+         points_2_missed = points_2_attempted - points_2_made,
+         points_3_missed = points_3_attempted - points_3_made,
+         points_free_throws_missed = points_free_throws_attempted - points_free_throws_made,
+         points_made_percentage = points_made / points_attempted * 100,
+         points_2_made_percentage = points_2_made / points_2_attempted * 100,
+         points_3_made_percentage = points_3_made / points_3_attempted * 100,
+         points_free_throws_made_percentage = points_free_throws_made / points_free_throws_attempted * 100)
+}
+
+df_tournament_win <- data_manipulation_tournament(df_tournament_win) %>% mutate(outcome = "win")
+glimpse(df_tournament_win)
+
+df_tournament_loss <- data_manipulation_tournament(df_tournament_loss) %>% mutate(outcome = "loss")
+glimpse(df_tournament_loss)
+
+df_tournament_all <- bind_rows(df_tournament_win, df_tournament_loss) %>% mutate(outcome = as_factor(outcome))
+glimpse(df_tournament_all)
+```
+
+Now let's compare some winning and losing stats.
+
+## Across All Seasons
+
+### Most Tournament Game Wins
+
+```{r}
+df_tournament_all %>%
+  group_by(team_name, outcome) %>%
+  count() %>%
+  ungroup() %>%
+  filter(outcome == "win") %>%
+  top_n(10) %>%
+  arrange(desc(n)) %>%
+  mutate(team_name = factor(team_name, levels = team_name)) %>%
+  ggplot(., aes(x = team_name, y = n, fill = n)) + 
+    geom_col() +
+    scale_fill_distiller(palette = "Blues", direction = -1) +
+    theme_minimal() + 
+    theme(axis.text.x = element_text(hjust = 1, angle = 45)) +
+    labs(title = "Most Wins",
+         x = "\nTeam",
+         y = "Frequency\n",
+         fill = "Frequency\n")
+```
+
+### Most Championship Wins
+```{r}
+df_most_wins <- df_tournament_all %>%
+  group_by(season, team_name, outcome) %>%
+  count() %>%
+  ungroup() %>%
+  filter(outcome == "win", n == 6) %>%
+  select(-n) %>%
+  group_by(team_name) %>%
+  count() %>%
+  ungroup() %>%
+  arrange(desc(n)) %>%
+  mutate(team_name = factor(team_name, levels = team_name))
+
+ggplot(df_most_wins, aes(x = team_name, y = n, fill = n)) + 
+    geom_col() +
+    scale_fill_distiller(palette = "Blues", direction = -1) +
+    theme_minimal() + 
+    theme(axis.text.x = element_text(hjust = 1, angle = 45)) +
+    labs(title = "Most Championship Wins",
+         x = "\nTeam",
+         y = "Frequency\n",
+         fill = "Frequency\n")
+```
+
+### Metrics
+```{r}
+tournament_metrics <- df_tournament_all %>%
+  select(-c(season, n_day, team_name, index, outcome)) %>%
+  colnames()
+
+for (metric in tournament_metrics) {
+  figure <- df_tournament_all %>%
+    ggplot(., aes(x = eval(as.name((metric))), fill = outcome)) + 
+      geom_density(alpha = 0.5, color = 0) +
+      theme_minimal() + 
+      labs(x = paste0("\n",metric),
+           y = "Density\n")
+  print(figure)
+}
+```
+
+It looks like the winning team takes slightly less shots, misses less, has more offensive rebounds, more assists, less turnovers, more steals, more blocks, and less personal fouls.
+
+## By Season
+
+### Most Overall Wins
+```{r, fig.width = 12, fig.height = 12}
+df_most_wins <- df_tournament_all %>%
+  group_by(season, team_name, outcome) %>%
+  count() %>%
+  ungroup() %>%
+  filter(outcome == "win") %>%
+  group_by(season) %>%
+  top_n(10) %>%
+  ungroup() %>%
+  arrange(season, desc(n)) %>%
+  mutate(order = row_number())
+
+ggplot(df_most_wins, aes(x = order, y = n, fill = n)) + 
+    geom_col() +
+    scale_fill_distiller(palette = "Blues", direction = -1) +
+    theme_minimal() + 
+    theme(axis.text.x = element_text(hjust = 1, angle = 45)) +
+    labs(title = "Most Wins During Regular Season",
+         x = "\nTeam",
+         y = "Frequency\n",
+         fill = "Frequency\n") +
+  facet_wrap(~ season, scales = "free") +
+  scale_x_continuous(breaks = df_most_wins$order,
+                     labels = df_most_wins$team_name,
+                     expand = c(0,0))
+```
+
+### Metrics
+
+```{r}
+for (metric in tournament_metrics) {
+  figure <- df_tournament_all %>%
+    ggplot(., aes(x = eval(as.name((metric))), fill = outcome)) + 
+      geom_density(alpha = 0.5, color = 0) +
+      theme_minimal() + 
+      labs(x = paste0("\n",metric),
+           y = "Density\n") + 
+      facet_wrap(~ season)
+  print(figure)
+}
+```
+
+These metrics look pretty consistent across the seasons.

@@ -1,0 +1,352 @@
+---
+title: "March Madness Analysis"
+subtitle: "Tournament by Regular Season"
+author: "Ekarin Eric Pongpipat, M.A."
+date: "Date"
+output:
+  html_document:
+    highlight: textmate
+    theme: lumen
+    toc: yes
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+---
+
+## R Packages
+```{r}
+packages <- c("tidyverse", "kableExtra", "broom", "broomExtra", "gganimate")
+xfun::pkg_attach(packages, message = F)
+```
+
+## Functions
+```{r}
+# create nice html tables ----
+nice_tables <- function(table) {
+  table %>%
+    kable() %>% 
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width = "100%", height = "200px")
+}
+
+# metric data manipulation ----
+metric_data_manipulation <- function(data) {
+  data %>%
+  select(season = Season,
+         n_day = DayNum,
+         team_name = TeamName,
+         score = Score,
+         points_made = FGM,
+         points_attempted = FGA,
+         points_3_made = FGM3,
+         points_3_attempted = FGA3,
+         points_free_throws_made = FTM,
+         points_free_throws_attempted = FTA,
+         rebound_offensive = OR,
+         rebound_defensive = DR,
+         assist = Ast,
+         turnovers = TO,
+         steals = Stl,
+         blocks = Blk,
+         personal_fouls = PF) %>%
+  mutate(index = 1:nrow(data),
+         points_2_made = points_made - points_3_made,
+         points_2_attempted = points_attempted - points_3_attempted,
+         points_missed = points_attempted - points_made,
+         points_2_missed = points_2_attempted - points_2_made,
+         points_3_missed = points_3_attempted - points_3_made,
+         points_free_throws_missed = points_free_throws_attempted - points_free_throws_made,
+         points_made_percentage = points_made / points_attempted * 100,
+         points_2_made_percentage = points_2_made / points_2_attempted * 100,
+         points_3_made_percentage = points_3_made / points_3_attempted * 100,
+         points_free_throws_made_percentage = points_free_throws_made / points_free_throws_attempted * 100)
+}
+```
+
+## Regular Season
+```{r}
+df_regular_season <- read_csv("data/RegularSeasonDetailedResults.csv")
+
+# add TeaamID and TeamName dataset
+df_teams <- read_csv("data/Teams.csv")
+
+# select only the TeamID and TeamName vars
+df_teams <- df_teams %>% 
+  select(TeamID, TeamName) 
+
+# create df for win and loss TeamID and TeamNames to append to regular season df
+df_wteams <- df_teams                         
+colnames(df_wteams) <- c("WTeamID", "WTeamName")
+df_lteams <- df_teams                        
+colnames(df_lteams) <- c("LTeamID", "LTeamName")
+
+# add actual names using inner_join
+# remove TeamID
+df_regular_season <- df_regular_season %>%
+  inner_join(., df_wteams, by = "WTeamID") %>%
+  inner_join(., df_lteams, by = "LTeamID") %>%
+  select(-contains("TeamID"))
+
+glimpse(df_regular_season)
+```
+
+Let's break apart the tables into wins and losses so that we can manipulate the same variables at the same time.
+
+```{r}
+# separate wins and losses
+df_regular_season_win <- df_regular_season %>%
+  select(Season, DayNum, contains("W"))
+colnames(df_regular_season_win) <- gsub("W", "", colnames(df_regular_season_win))
+
+df_regular_season_loss <- df_regular_season %>%
+  select(Season, DayNum, contains("L"))
+colnames(df_regular_season_loss) <- gsub("L", "", colnames(df_regular_season_loss))
+
+# include outcome
+df_regular_season_win <- metric_data_manipulation(df_regular_season_win) %>% 
+  mutate(outcome = "win")
+
+df_regular_season_loss <- metric_data_manipulation(df_regular_season_loss) %>% 
+  mutate(outcome = "loss")
+
+df_win_num <- df_regular_season_win %>%
+  select(-c(season, n_day, team_name, outcome, index))
+    
+df_loss_num <- df_regular_season_loss %>%
+  select(-c(season, n_day, team_name, outcome, index))
+
+df_reg_season_diff <- df_win_num-df_loss_num
+
+df_reg_season_diff <- df_reg_season_diff %>%
+  mutate(season = df_regular_season_win$season,
+         n_day = df_regular_season_win$n_day,
+         team_name = df_regular_season_win$team_name,
+         index = df_regular_season_win$index)
+glimpse(df_reg_season_diff)
+
+# combine together using bind_rows 
+df_regular_season_all <- bind_rows(df_regular_season_win, df_regular_season_loss) %>% 
+  mutate(outcome = as_factor(outcome))
+
+glimpse(df_regular_season_all)
+```
+
+Let's obtain overall season stats for each team. Let's obtain the total and mean.
+
+```{r}
+df_regular_season_all_total <- df_regular_season_all %>%
+  select(-n_day, -index) %>%
+  rowwise() %>%
+  mutate(n_win = ifelse(outcome == "win", 1, 0)) %>%
+  ungroup() %>%
+  select(-outcome) %>%
+  group_by(season, team_name) %>%
+  summarise_all(sum) %>%
+  ungroup()
+glimpse(df_regular_season_all_total)
+
+df_regular_season_all_mean <- df_regular_season_all %>%
+  select(-n_day, -index, -outcome) %>%
+  group_by(season, team_name) %>%
+  summarise_all(mean) %>%
+  ungroup()
+glimpse(df_regular_season_all_mean)
+
+df_reg_season_diff_total <- df_reg_season_diff %>%
+  select(-c(index, n_day)) %>%
+  group_by(season, team_name) %>%
+  summarise_all(sum)
+glimpse(df_reg_season_diff_total)
+
+df_reg_season_diff_mean <- df_reg_season_diff %>%
+  select(-c(index, n_day)) %>%
+  group_by(season, team_name) %>%
+  summarise_all(mean)
+glimpse(df_reg_season_diff_mean)
+```
+
+## By season
+
+### Total
+
+```{r, fig.width = 12, fig.height = 12}
+metrics_total <- df_regular_season_all_total %>%
+  select(-season, -team_name) %>%
+  colnames()
+
+top_10 <- function(data) {
+  top_n(data, 10) %>%
+    arrange(desc(eval(as.name(metric))), team_name)
+}
+
+for (metric in metrics_total) {
+  
+  df_metric <- df_regular_season_all_total %>%
+    select(season, team_name, metric) %>%
+    group_by(season) %>%
+    nest() %>%
+    mutate(top_10 = map(data, top_10)) %>%
+    select(season, top_10) %>%
+    unnest() %>%
+    ungroup() %>%
+    arrange(season, desc(eval(as.name(metric))), team_name) %>%
+    ungroup() %>%
+    mutate(order = 1:nrow(.))
+    
+  figure <- ggplot(df_metric, aes(x = order, y = eval(as.name(metric)), fill = eval(as.name(metric)))) + 
+    geom_col() +
+    scale_fill_distiller(palette = "Blues", direction = -1) +
+    theme_minimal() + 
+    theme(axis.text.x = element_text(hjust = 1, angle = 45)) +
+    labs(x = "\nTeam",
+         y = paste0(metric, "\n"),
+         fill = "Frequency\n") +
+    facet_wrap(~ season, scales = "free") +
+    scale_x_continuous(breaks = df_metric$order,
+                       labels = df_metric$team_name,
+                       expand = c(0,0))
+  
+  print(figure)
+  
+}
+```
+
+### Mean
+
+```{r, fig.width = 12, fig.height = 12}
+metrics_mean <- df_regular_season_all_mean %>%
+  select(-season, -team_name) %>%
+  colnames()
+
+for (metric in metrics_mean) {
+  
+  df_metric <- df_regular_season_all_mean %>%
+    select(season, team_name, metric) %>%
+    group_by(season) %>%
+    nest() %>%
+    mutate(top_10 = map(data, top_10)) %>%
+    select(season, top_10) %>%
+    unnest() %>%
+    ungroup() %>%
+    arrange(season, desc(eval(as.name(metric))), team_name) %>%
+    ungroup() %>%
+    mutate(order = 1:nrow(.))
+    
+  figure <- ggplot(df_metric, aes(x = order, y = eval(as.name(metric)), fill = eval(as.name(metric)))) + 
+    geom_col() +
+    scale_fill_distiller(palette = "Blues", direction = -1) +
+    theme_minimal() + 
+    theme(axis.text.x = element_text(hjust = 1, angle = 45)) +
+    labs(x = "\nTeam",
+         y = paste0(metric, "\n"),
+         fill = "Frequency\n") +
+    facet_wrap(~ season, scales = "free") +
+    scale_x_continuous(breaks = df_metric$order,
+                       labels = df_metric$team_name,
+                       expand = c(0,0))
+  
+  print(figure)
+  
+}
+```
+
+## Tourney
+
+```{r}
+df_tournament <- read_csv("data/NCAATourneyDetailedResults.csv") %>%
+  inner_join(., df_wteams, by = "WTeamID") %>%
+  inner_join(., df_lteams, by = "LTeamID") %>%
+  select(-contains("TeamID"))
+glimpse(df_tournament)
+
+df_tournament_win <- df_tournament %>%
+  select(Season, DayNum, contains("W"))
+colnames(df_tournament_win) <- gsub("W", "", colnames(df_tournament_win))
+
+df_tournament_loss <- df_tournament %>%
+  select(Season, DayNum, contains("L"))
+colnames(df_tournament_loss) <- gsub("L", "", colnames(df_tournament_loss))
+
+df_tournament_win <- metric_data_manipulation(df_tournament_win) %>% 
+  mutate(outcome = "win")
+glimpse(df_tournament_win)
+
+df_tournament_loss <- metric_data_manipulation(df_tournament_loss) %>% 
+  mutate(outcome = "loss")
+glimpse(df_tournament_loss)
+
+df_tournament_all <- bind_rows(df_tournament_win, df_tournament_loss) %>% 
+  mutate(outcome = as_factor(outcome))
+glimpse(df_tournament_all)
+
+df_tournament_all_total <- df_tournament_all %>%
+  rowwise() %>%
+  mutate(win = ifelse(outcome == "win", 1, 0)) %>%
+  group_by(season, team_name) %>%
+  summarise(n_win_tourney = sum(win)) %>%
+  ungroup()
+glimpse(df_tournament_all_total)
+
+colnames(df_regular_season_all_total)[3:ncol(df_regular_season_all_total)] <- paste0(colnames(df_regular_season_all_total)[3:ncol(df_regular_season_all_total)], "_total")
+
+colnames(df_regular_season_all_mean)[3:ncol(df_regular_season_all_mean)] <- paste0(colnames(df_regular_season_all_mean)[3:ncol(df_regular_season_all_mean)], "_mean")
+
+colnames(df_reg_season_diff_total)[3:ncol(df_reg_season_diff_total)] <- paste0(colnames(df_reg_season_diff_total)[3:ncol(df_reg_season_diff_total)], "_diff_total")
+
+colnames(df_reg_season_diff_mean)[3:ncol(df_reg_season_diff_mean)] <- paste0(colnames(df_reg_season_diff_mean)[3:ncol(df_reg_season_diff_mean)], "_diff_mean")
+
+df_reg_tourney <- df_tournament_all_total %>%
+  inner_join(., df_regular_season_all_total, by = c("season", "team_name")) %>%
+  inner_join(., df_regular_season_all_mean, by = c("season", "team_name")) %>%
+  inner_join(., df_reg_season_diff_total, by = c("season", "team_name")) %>%
+  inner_join(., df_reg_season_diff_mean, by = c("season", "team_name"))
+glimpse(df_reg_tourney)
+```
+
+## Correlations with Tourney Wins
+
+### Across All Seasons
+
+```{r}
+metric_reg_tourney <- df_reg_tourney %>%
+  select(-season, -team_name, -n_win_tourney) %>%
+  colnames()
+
+for (metric in metric_reg_tourney) {
+  figure <- df_reg_tourney %>% 
+    ggplot(., aes(x = eval(as.name(metric)), y = n_win_tourney)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "lm") +
+    labs(x = paste0("\n",metric),
+         y = "n_win_tourney\n") +
+    theme_minimal()
+  print(figure)
+}
+```
+
+```{r, fig.width=3, fig.height=6}
+df_reg_tourney %>%
+  select(-season, -team_name) %>%
+  cor() %>%
+  reshape2::melt() %>%
+  filter(Var1 == "n_win_tourney") %>%
+  ggplot(., aes(Var1, Var2, fill = value)) +
+  geom_raster() +
+  theme(axis.text.x = element_text(hjust = 1, angle = 45)) +
+  scale_fill_distiller(palette = "RdBu", limits = c(-1,1))
+```
+
+### By Seasons
+
+```{r}
+for (metric in metric_reg_tourney) {
+  figure <- df_reg_tourney %>%
+    ggplot(., aes(x = eval(as.name(metric)), y = n_win_tourney)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "lm") +
+    labs(x = paste0("\n",metric),
+         y = "n_win_tourney\n") +
+    theme_minimal() +
+    facet_wrap(~ season)
+  print(figure)
+}
+```
